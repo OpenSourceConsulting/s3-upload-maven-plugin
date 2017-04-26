@@ -75,7 +75,7 @@ public class S3UploadMojo extends AbstractMojo {
 		AmazonS3 s3 = getS3Client(accessKey, secretKey);
 
 		if (!s3.doesBucketExist(bucketName)) {
-			throw new MojoExecutionException("Bucket doesn't exist: " + bucketName);
+			s3.createBucket(bucketName);
 		}
 
 		if (doNotUpload) {
