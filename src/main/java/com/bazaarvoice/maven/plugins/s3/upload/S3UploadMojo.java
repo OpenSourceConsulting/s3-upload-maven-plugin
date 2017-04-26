@@ -1,12 +1,20 @@
 package com.bazaarvoice.maven.plugins.s3.upload;
 
+import java.io.File;
+
+import org.apache.maven.plugin.AbstractMojo;
+import org.apache.maven.plugin.MojoExecutionException;
+import org.apache.maven.plugins.annotations.Mojo;
+import org.apache.maven.plugins.annotations.Parameter;
+
 import com.amazonaws.auth.AWSCredentials;
 import com.amazonaws.auth.AWSCredentialsProvider;
+import com.amazonaws.auth.AWSStaticCredentialsProvider;
 import com.amazonaws.auth.BasicAWSCredentials;
 import com.amazonaws.auth.DefaultAWSCredentialsProviderChain;
-import com.amazonaws.internal.StaticCredentialsProvider;
+import com.amazonaws.regions.Regions;
 import com.amazonaws.services.s3.AmazonS3;
-import com.amazonaws.services.s3.AmazonS3Client;
+import com.amazonaws.services.s3.AmazonS3ClientBuilder;
 import com.amazonaws.services.s3.Headers;
 import com.amazonaws.services.s3.model.CannedAccessControlList;
 import com.amazonaws.services.s3.model.ObjectMetadata;
@@ -14,127 +22,136 @@ import com.amazonaws.services.s3.model.PutObjectRequest;
 import com.amazonaws.services.s3.transfer.ObjectMetadataProvider;
 import com.amazonaws.services.s3.transfer.Transfer;
 import com.amazonaws.services.s3.transfer.TransferManager;
-import org.apache.maven.plugin.AbstractMojo;
-import org.apache.maven.plugin.MojoExecutionException;
-import org.apache.maven.plugins.annotations.Mojo;
-import org.apache.maven.plugins.annotations.Parameter;
-
-import java.io.File;
+import com.amazonaws.services.s3.transfer.TransferManagerBuilder;
 
 @Mojo(name = "s3-upload")
-public class S3UploadMojo extends AbstractMojo
-{
-  /** Access key for S3. */
-  @Parameter(property = "s3-upload.accessKey")
-  private String accessKey;
+public class S3UploadMojo extends AbstractMojo {
+	
+	/** Access key for S3. */
+	@Parameter(property = "s3-upload.accessKey")
+	private String accessKey;
 
-  /** Secret key for S3. */
-  @Parameter(property = "s3-upload.secretKey")
-  private String secretKey;
+	/** Secret key for S3. */
+	@Parameter(property = "s3-upload.secretKey")
+	private String secretKey;
 
-  /**
-   *  Execute all steps up except the upload to the S3.
-   *  This can be set to true to perform a "dryRun" execution.
-   */
-  @Parameter(property = "s3-upload.doNotUpload", defaultValue = "false")
-  private boolean doNotUpload;
+	/** Force override of region for S3 regions such as EU. */
+	@Parameter(property = "s3-upload.region", defaultValue = "ap-northeast-2")
+	private String region;
 
-  /** The file/folder to upload. */
-  @Parameter(property = "s3-upload.source", required = true)
-  private File source;
+	/**
+	 * Execute all steps up except the upload to the S3. This can be set to true
+	 * to perform a "dryRun" execution.
+	 */
+	@Parameter(property = "s3-upload.doNotUpload", defaultValue = "false")
+	private boolean doNotUpload;
 
-  /** The bucket to upload into. */
-  @Parameter(property = "s3-upload.bucketName", required = true)
-  private String bucketName;
+	/** The file/folder to upload. */
+	@Parameter(property = "s3-upload.source", required = true)
+	private File source;
 
-  /** The file/folder (in the bucket) to create. */
-  @Parameter(property = "s3-upload.destination", required = true)
-  private String destination;
+	/** The bucket to upload into. */
+	@Parameter(property = "s3-upload.bucketName", required = true)
+	private String bucketName;
 
-  /** Force override of endpoint for S3 regions such as EU. */
-  @Parameter(property = "s3-upload.endpoint")
-  private String endpoint;
+	/** The file/folder (in the bucket) to create. */
+	@Parameter(property = "s3-upload.destination")
+	private String destination;
 
-  /** In the case of a directory upload, recursively upload the contents. */
-  @Parameter(property = "s3-upload.recursive", defaultValue = "false")
-  private boolean recursive;
+	/** In the case of a directory upload, recursively upload the contents. */
+	@Parameter(property = "s3-upload.recursive", defaultValue = "false")
+	private boolean recursive;
 
-  @Override
-  public void execute() throws MojoExecutionException
-  {
-    if (!source.exists()) {
-      throw new MojoExecutionException("File/folder doesn't exist: " + source);
-    }
+	/** make public accessable */
+	@Parameter(property = "s3-upload.makePublic", defaultValue = "true")
+	private boolean makePublic;
 
-    AmazonS3 s3 = getS3Client(accessKey, secretKey);
-    if (endpoint != null) {
-      s3.setEndpoint(endpoint);
-    }
+	@Override
+	public void execute() throws MojoExecutionException {
+		if (!source.exists()) {
+			throw new MojoExecutionException("File/folder doesn't exist: " + source);
+		}
 
-    if (!s3.doesBucketExist(bucketName)) {
-      throw new MojoExecutionException("Bucket doesn't exist: " + bucketName);
-    }
+		AmazonS3 s3 = getS3Client(accessKey, secretKey);
 
-    if (doNotUpload) {
-      getLog().info(String.format("File %s would have be uploaded to s3://%s/%s (dry run)",
-              source, bucketName, destination));
+		if (!s3.doesBucketExist(bucketName)) {
+			throw new MojoExecutionException("Bucket doesn't exist: " + bucketName);
+		}
 
-      return;
-    }
+		if (doNotUpload) {
+			getLog().info(String.format("File %s would have be uploaded to s3://%s/%s (dry run)", source, bucketName, destination));
+			return;
+		}
 
-    boolean success = upload(s3, source);
-    if (!success) {
-      throw new MojoExecutionException("Unable to upload file to S3.");
-    }
+		boolean success = upload(s3, source);
+		
+		if (!success) {
+			throw new MojoExecutionException("Unable to upload file to S3.");
+		}
 
-    getLog().info(String.format("File %s uploaded to s3://%s/%s",
-            source, bucketName, destination));
-  }
+		if (destination == null || "".equals(destination)) {
+			getLog().info(String.format("File %s uploaded to s3://%s", source, bucketName));
+		} else {
+			getLog().info(String.format("File %s uploaded to s3://%s/%s", source, bucketName, destination));
+		}
+	}
 
-  private static AmazonS3 getS3Client(String accessKey, String secretKey)
-  {
-    AWSCredentialsProvider provider;
-    if (accessKey != null && secretKey != null) {
-      AWSCredentials credentials = new BasicAWSCredentials(accessKey, secretKey);
-      provider = new StaticCredentialsProvider(credentials);
-    } else {
-      provider = new DefaultAWSCredentialsProviderChain();
-    }
+	private AmazonS3 getS3Client(String accessKey, String secretKey) {
+		AWSCredentialsProvider provider;
+		
+		if (accessKey != null && secretKey != null) {
+			AWSCredentials credentials = new BasicAWSCredentials(accessKey, secretKey);
+			provider = new AWSStaticCredentialsProvider(credentials);
+		} else {
+			provider = new DefaultAWSCredentialsProviderChain();
+		}
 
-    return new AmazonS3Client(provider);
-  }
+		return AmazonS3ClientBuilder.standard().withRegion(Regions.fromName(region)).withCredentials(provider).build();
+	}
 
-  private boolean upload(AmazonS3 s3, File sourceFile) throws MojoExecutionException
-  {
-    TransferManager mgr = new TransferManager(s3);
+	private boolean upload(AmazonS3 s3, File sourceFile) throws MojoExecutionException {
+		TransferManager mgr = TransferManagerBuilder.standard().withS3Client(s3).build();
 
-    Transfer transfer;
-    if (sourceFile.isFile()) {
-      transfer = mgr.upload(new PutObjectRequest(bucketName, destination, sourceFile)
-              .withCannedAcl(CannedAccessControlList.BucketOwnerFullControl));
-    } else if (sourceFile.isDirectory()) {
-      transfer = mgr.uploadDirectory(bucketName, destination, sourceFile, recursive,
-              new ObjectMetadataProvider() {
-                @Override
-                public void provideObjectMetadata(final File file, final ObjectMetadata objectMetadata) {
-                  /**
-                   * This is a terrible hack, but the SDK as of 1.10.69 does not allow setting ACLs
-                   * for directory uploads otherwise.
-                   */
-                  objectMetadata.setHeader(Headers.S3_CANNED_ACL, CannedAccessControlList.BucketOwnerFullControl);
-                }
-              });
-    } else {
-      throw new MojoExecutionException("File is neither a regular file nor a directory " + sourceFile);
-    }
-    try {
-      getLog().debug("Transferring " + transfer.getProgress().getTotalBytesToTransfer() + " bytes...");
-      transfer.waitForCompletion();
-      getLog().info("Transferred " + transfer.getProgress().getBytesTransferred() + " bytes.");
-    } catch (InterruptedException e) {
-      return false;
-    }
+		Transfer transfer = null;
+		if (sourceFile.isFile()) {
+			String key = null;
+			
+			if (destination != null && !"".equals(destination)) {
+				key = destination + "/" + sourceFile.getName();
+			} else {
+				key = sourceFile.getName();
+			}
+			
+			PutObjectRequest request = new PutObjectRequest(bucketName, key, sourceFile)
+					.withCannedAcl(CannedAccessControlList.BucketOwnerFullControl);
+			
+			if (makePublic) {
+				request.withCannedAcl(CannedAccessControlList.PublicRead);
+			}
+			
+			transfer = mgr.upload(request);
+		} else if (sourceFile.isDirectory()) {
+			transfer = mgr.uploadDirectory(bucketName, destination, sourceFile, recursive,
+					new ObjectMetadataProvider() {
+						@Override
+						public void provideObjectMetadata(final File file, final ObjectMetadata objectMetadata) {
+							if (makePublic) {
+								objectMetadata.setHeader(Headers.S3_CANNED_ACL, CannedAccessControlList.PublicRead);
+							}
+						}
+					});
+		} else {
+			throw new MojoExecutionException("File is neither a regular file nor a directory " + sourceFile);
+		}
+		
+		try {
+			getLog().debug("Transferring " + transfer.getProgress().getTotalBytesToTransfer() + " bytes...");
+			transfer.waitForCompletion();
+			getLog().info("Transferred " + transfer.getProgress().getBytesTransferred() + " bytes.");
+		} catch (InterruptedException e) {
+			return false;
+		}
 
-    return transfer.getState() == Transfer.TransferState.Completed;
-  }
+		return transfer.getState() == Transfer.TransferState.Completed;
+	}
 }
